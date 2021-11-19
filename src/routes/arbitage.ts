@@ -1,7 +1,7 @@
 import express, { Router } from "express";
 import ArbitageController from "../controllers/arbitage";
 
-class UserRoutes {
+class ArbitageRoutes {
   public arbitageRouter: Router;
 
   constructor() {
@@ -14,4 +14,4 @@ class UserRoutes {
   }
 }
 
-export default new UserRoutes().arbitageRouter;
+export default new ArbitageRoutes().arbitageRouter;
