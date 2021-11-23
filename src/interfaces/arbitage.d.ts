@@ -1,10 +1,10 @@
 export interface ArbitagePath {
-  maxPath: string;
+  stringPath: string;
   pathArray: Array<PathValue>;
 }
 export interface PathValue {
   currency: string;
-  rate: string;
+  rate: number;
 }
 export interface ExchangeResponse {
   success: boolean;

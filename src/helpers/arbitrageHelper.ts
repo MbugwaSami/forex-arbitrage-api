@@ -1,7 +1,11 @@
 import axios, { AxiosRequestConfig } from "axios";
 
 //local imports
-import { ArbitagePath, ExchangeResponse } from "../interfaces/arbitage";
+import {
+  ArbitagePath,
+  ExchangeResponse,
+  PathValue,
+} from "../interfaces/arbitage";
 
 class ArbitageHelper {
   static async getMaxPath(
@@ -9,22 +13,39 @@ class ArbitageHelper {
     currentCurrency: string,
     currentArbitage: number,
     maxArbitage: number,
-    currentPath: Array<string>,
-    maxPath: Array<string>,
+    currentPath: Array<PathValue>,
+    maxPath: Array<PathValue>,
+    currentSringPath: string,
+    maxStringPath: string,
     currencyMapper: { [key: string]: { [key: string]: any } }
   ): Promise<ArbitagePath> {
-    //Get currency mapper for base currency and it's associated currency
-
     const associateCurrency = currencyMapper?.[currentCurrency];
+    if(!associateCurrency){
+      throw new Error(`currency ${currentCurrency} was not found`)
+    }
     const possibleExchanges = Object.keys(associateCurrency).filter((key) => {
-      return !currentPath.includes(key);
+      return !currentPath.find(
+        (current) => current.currency.toLowerCase() === key.toLowerCase()
+      );
     });
+    if (possibleExchanges.length === 0) {
+      return { pathArray: maxPath, stringPath: maxStringPath };
+    }
 
     //loop all possible currency computing new arbitage values
     const allRecursed = possibleExchanges?.map(async (associateCurrency) => {
+      const newStringPath =
+        currentSringPath +
+        `=> ${currencyMapper[currentCurrency][associateCurrency]} ${associateCurrency}`;
       const newArbitage =
         currentArbitage * currencyMapper[currentCurrency][associateCurrency];
-      const newPath = [...currentPath, associateCurrency];
+      const newPath = [
+        ...currentPath,
+        {
+          currency: associateCurrency,
+          rate: currencyMapper[currentCurrency][associateCurrency],
+        },
+      ];
       const changeMaxValues = this.changeMaxValues(
         maxArbitage,
         newArbitage * currencyMapper[associateCurrency][baseCurrency]
@@ -32,7 +53,16 @@ class ArbitageHelper {
       if (changeMaxValues) {
         maxArbitage =
           newArbitage * currencyMapper[associateCurrency][baseCurrency];
-        maxPath = [...newPath, baseCurrency];
+        maxPath = [
+          ...newPath,
+          {
+            currency: baseCurrency,
+            rate: currencyMapper[associateCurrency][baseCurrency],
+          },
+        ];
+        maxStringPath =
+        newStringPath +`=> ${currencyMapper[associateCurrency][baseCurrency]}${baseCurrency}`;
+
       }
 
       //call function recursively to get values associted to the current currency
@@ -43,13 +73,15 @@ class ArbitageHelper {
         maxArbitage,
         newPath,
         maxPath,
+        newStringPath,
+        maxStringPath,
         currencyMapper
       );
       return arbitagePath;
     });
     const allRecured = await Promise.all(allRecursed);
     if (allRecured) {
-      return {} as ArbitagePath;
+      return { pathArray: maxPath, stringPath: maxStringPath };
     }
   }
 
@@ -90,20 +122,15 @@ class ArbitageHelper {
     }
   }
 
-  static async currencyExchanges(axiosConfigs: AxiosRequestConfig, retry = 3) {
-    try {
-      const data = await axios.get<ExchangeResponse>(
-        "https://data.fixer.io/api/latest",
-        axiosConfigs
-      );
-      return data;
-    } catch (error) {
-      if (retry > 0) {
-        setTimeout(() => this.currencyExchanges(axiosConfigs, retry - 1), 2000);
-      } else {
-        throw new Error("fails here");
-      }
+  static async currencyExchanges(axiosConfigs: AxiosRequestConfig) {
+    const res = await axios.get<ExchangeResponse>(
+      "https://data.fixer.io/api/latest",
+      axiosConfigs
+    );
+    if (!res.data?.success) {
+      throw new Error(res.data?.error?.info);
     }
+    return res;
   }
 
   static changeMaxValues(maxArbitage: number, latestArbitage: number) {
