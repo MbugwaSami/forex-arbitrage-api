@@ -12,11 +12,11 @@ class ArbitageController {
           message: "please provide base currency",
         });
       }
-      const maxPath = [base as string];
       const baseCurrency = base.toString().toUpperCase();
+      const maxPath = [{ currency: baseCurrency, rate: 1 }];
       const maxArbitage = 1;
+      const maxStringPath = `1 ${baseCurrency}`;
       const currencyMapper = await ArbitageHelper.getCurrencyMap(baseCurrency);
-
       if (currencyMapper) {
         const arbitagePath = await ArbitageHelper.getMaxPath(
           baseCurrency,
@@ -25,6 +25,8 @@ class ArbitageController {
           maxArbitage,
           maxPath,
           maxPath,
+          maxStringPath,
+          maxStringPath,
           currencyMapper
         );
         return res.status(200).send({
