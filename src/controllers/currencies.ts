@@ -1,4 +1,4 @@
-import express, { Response, Request } from "express";
+import { Response, Request } from "express";
 
 //local imports
 import Helper from "../helpers/currencies";

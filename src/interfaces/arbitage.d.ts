@@ -1,7 +1,20 @@
-export interface ArbitagePath {
-  stringPath: string;
-  pathArray: Array<PathValue>;
+export interface Arbitrage {
+  arbitrage: number;
+  path: Array<Path>;
 }
+
+export interface Path {
+  srcCurr: string;
+  destCurr: string;
+  arbitrage: number;
+  rate: number;
+}
+
+export interface ArbitrageRes {
+  max: Arbitrage;
+  arbitrages: Array<Arbitrage>;
+}
+
 export interface PathValue {
   currency: string;
   rate: number;
@@ -15,4 +28,3 @@ export interface ExchangeResponse {
     info: string;
   };
 }
-

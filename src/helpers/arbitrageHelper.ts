@@ -1,140 +1,129 @@
-import axios, { AxiosRequestConfig } from "axios";
-
 //local imports
-import {
-  ArbitagePath,
-  ExchangeResponse,
-  PathValue,
-} from "../interfaces/arbitage";
+import { ArbitrageRes, Arbitrage } from "../interfaces/arbitage";
+import Database from "../database";
+import CurrencyGraph, { CurrencyRate } from "./currencyGraph";
+import { Path } from "../interfaces/arbitage";
 
 class ArbitageHelper {
-  static async getMaxPath(
-    baseCurrency: string,
-    currentCurrency: string,
-    currentArbitage: number,
-    maxArbitage: number,
-    currentPath: Array<PathValue>,
-    maxPath: Array<PathValue>,
-    currentSringPath: string,
-    maxStringPath: string,
-    currencyMapper: { [key: string]: { [key: string]: any } }
-  ): Promise<ArbitagePath> {
-    const associateCurrency = currencyMapper?.[currentCurrency];
-    if(!associateCurrency){
-      throw new Error(`currency ${currentCurrency} was not found`)
-    }
-    const possibleExchanges = Object.keys(associateCurrency).filter((key) => {
-      return !currentPath.find(
-        (current) => current.currency.toLowerCase() === key.toLowerCase()
-      );
-    });
-    if (possibleExchanges.length === 0) {
-      return { pathArray: maxPath, stringPath: maxStringPath };
+  static getMaxPath(baseCurrency: string): ArbitrageRes {
+    //create graph to represent our problem
+    //represent w1*w2*w3 as sum by => log(w1*w2*w3)= log(w1) +log(w2)+log(w3)
+    const currencyGraph = new CurrencyGraph();
+    const currencyRates = Database.getData();
+
+    //add graph vertices(unique currencies)
+    for (let key in currencyRates) {
+      currencyGraph.addCurrency(key);
     }
 
-    //loop all possible currency computing new arbitage values
-    const allRecursed = possibleExchanges?.map(async (associateCurrency) => {
-      const newStringPath =
-        currentSringPath +
-        `=> ${currencyMapper[currentCurrency][associateCurrency]} ${associateCurrency}`;
-      const newArbitage =
-        currentArbitage * currencyMapper[currentCurrency][associateCurrency];
-      const newPath = [
-        ...currentPath,
-        {
-          currency: associateCurrency,
-          rate: currencyMapper[currentCurrency][associateCurrency],
-        },
-      ];
-      const changeMaxValues = this.changeMaxValues(
-        maxArbitage,
-        newArbitage * currencyMapper[associateCurrency][baseCurrency]
-      );
-      if (changeMaxValues) {
-        maxArbitage =
-          newArbitage * currencyMapper[associateCurrency][baseCurrency];
-        maxPath = [
-          ...newPath,
-          {
-            currency: baseCurrency,
-            rate: currencyMapper[associateCurrency][baseCurrency],
-          },
-        ];
-        maxStringPath =
-        newStringPath +`=> ${currencyMapper[associateCurrency][baseCurrency]}${baseCurrency}`;
+    //add graph edges(exchange rates between two currency)
+    for (let key in currencyRates) {
+      const srcCurrency = key;
+      for (let relKey in currencyRates[key]) {
+        const destCurrency = relKey;
 
-      }
-
-      //call function recursively to get values associted to the current currency
-      const arbitagePath = await this.getMaxPath(
-        baseCurrency,
-        associateCurrency,
-        newArbitage,
-        maxArbitage,
-        newPath,
-        maxPath,
-        newStringPath,
-        maxStringPath,
-        currencyMapper
-      );
-      return arbitagePath;
-    });
-    const allRecured = await Promise.all(allRecursed);
-    if (allRecured) {
-      return { pathArray: maxPath, stringPath: maxStringPath };
-    }
-  }
-
-  static async getCurrencyMap(
-    baseCurrency: string
-  ): Promise<{ [key: string]: { [key: string]: any } }> {
-    let axiosConfigs = {
-      params: {
-        base: baseCurrency,
-        access_key: process.env.ACCESS_KEY,
-      },
-    };
-    const mapper: { [key: string]: any } = {};
-
-    //get exchange rates for base currency
-    const { data } = await this.currencyExchanges(axiosConfigs);
-    if (data) {
-      mapper[data?.base] = data?.rates;
-
-      //get exchange rates for all other currency associated to base
-      const mapAssociated = Object.keys(data?.rates)?.map(async (base) => {
-        axiosConfigs = {
-          ...axiosConfigs,
-          params: { ...axiosConfigs.params, base },
-        };
-        const { data: chidrenData } = await this.currencyExchanges(
-          axiosConfigs
+        //Get log to convert our problem to a graph problem(graph work with sums) and
+        //Multiply each value with -1 =>Transforma positive cycle to negative cycle.
+        const currencyRate = -Math.log(
+          currencyRates[srcCurrency][destCurrency]
         );
-        if (chidrenData) {
-          mapper[chidrenData?.base] = chidrenData?.rates;
-        }
-        return chidrenData;
-      });
-      const allMaped = await Promise.all(mapAssociated);
-      if (allMaped) {
-        return mapper;
+        currencyGraph.addCurrenciesRates(
+          srcCurrency,
+          destCurrency,
+          currencyRate
+        );
       }
     }
+
+    //get arbitrages and calculate their values
+    const arbitrages = this.getArbitrages(currencyGraph, baseCurrency);
+    let max = { arbitrage: 1 } as Arbitrage;
+    const arbitageCalcs = arbitrages.map((arb) => {
+      let arbitrage = 1;
+      let path: Array<Path> = [];
+      arb.path?.forEach((curr, index) => {
+        if (index < arb.path.length - 1) {
+          arbitrage = arbitrage * currencyRates[curr][arb.path[index + 1]];
+          path.push({
+            srcCurr: curr,
+            destCurr: arb.path[index + 1],
+            arbitrage,
+            rate: currencyRates[curr][arb.path[index + 1]]
+          });
+        }
+      });
+      if (arbitrage > max.arbitrage) {
+        max = { ...max, arbitrage, path: path };
+      }
+      return { arbitrage, path: path};
+    });
+
+    return { arbitrages: arbitageCalcs, max: max };
+    //get currency arbitrage
   }
 
-  static async currencyExchanges(axiosConfigs: AxiosRequestConfig) {
-    const res = await axios.get<ExchangeResponse>(
-      "https://data.fixer.io/api/latest",
-      axiosConfigs
-    );
-    if (!res.data?.success) {
-      throw new Error(res.data?.error?.info);
+  //use Bellman algorithim to get the different negative cycles
+  static getArbitrages(graph: CurrencyGraph, sourceCurrency: string) {
+    const { currencies, currenciesRates } = graph;
+
+    // Initialize rate from base
+    // to all other currencies as max number apart from itself
+    const totalDistance: { [key: string]: any } = {};
+    let currenciesValues = currencies.values();
+    for (let i = 0; i < currencies.size; i++) {
+      const nextCurr = currenciesValues.next().value;
+      totalDistance[nextCurr] = {};
+      totalDistance[nextCurr]["value"] = Number.MAX_VALUE;
+      totalDistance[nextCurr]["prev"] = "";
+      totalDistance[nextCurr];
     }
-    return res;
-  }
+    totalDistance[sourceCurrency]["value"] = 0;
 
-  static changeMaxValues(maxArbitage: number, latestArbitage: number) {
-    return latestArbitage > maxArbitage;
+    //Visit each edge(currency rate between two currencies) for N-1 times }N is number of currencies
+    //Relax the distance between the edges
+    currenciesValues = currencies.values();
+    for (let i = 1; i <= currencies.size; i++) {
+      for (let j = 0; j < currenciesRates.length; j++) {
+        const { fromCurr, toCurr, rate } = currenciesRates[j];
+        if (
+          totalDistance[fromCurr]["value"] != Number.MAX_VALUE &&
+          totalDistance[fromCurr]["value"] + rate <
+            totalDistance[toCurr]["value"]
+        ) {
+          totalDistance[toCurr]["value"] =
+            totalDistance[fromCurr]["value"] + rate;
+          totalDistance[toCurr]["prev"] = fromCurr;
+        }
+      }
+    }
+
+    //perform one more iteration to get negative cycles
+    const arbitrages = [];
+    for (let j = 0; j < currenciesRates.length; j++) {
+      const { fromCurr, toCurr, rate } = currenciesRates[j];
+      //arbitrage found
+      if (
+        totalDistance[fromCurr]["value"] != Number.MAX_VALUE &&
+        totalDistance[fromCurr]["value"] + rate < totalDistance[toCurr]["value"]
+      ) {
+        totalDistance[toCurr]["value"] =
+          totalDistance[fromCurr]["value"] + rate;
+        totalDistance[toCurr]["prev"] = fromCurr;
+        const weight = totalDistance[fromCurr]["value"] + rate;
+        if (toCurr === sourceCurrency) {
+          //create path to arbitrages
+          const path: Array<string> = [];
+          let current = toCurr;
+          while (current.length && !path.includes(current)) {
+            path.unshift(current);
+            current = totalDistance[current]["prev"];
+          }
+          path.unshift(toCurr);
+          arbitrages.push({ path, weight });
+        }
+      }
+    }
+    return arbitrages;
   }
 }
 
